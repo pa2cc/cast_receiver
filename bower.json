@@ -1,7 +1,7 @@
 {
-  "name": "PACC (chromecast)",
-  "version": "0.0.0",
-  "homepage": "https://github.com/saemy/pacc",
+  "name": "PACC_receiver",
+  "version": "1.1.0",
+  "homepage": "https://github.com/pa2cc/cast_receiver",
   "authors": [
     "Sämy Zehnder <saemy.zehnder@gorrion.ch>"
   ],

@@ -1,81 +1,91 @@
 'use strict';
 
-var RTCPeerConnection = window.RTCPeerConnection || window.mozRTCPeerConnection || window.webkitRTCPeerConnection;
-var RTCSessionDescription = window.RTCSessionDescription || window.mozRTCSessionDescription || window.webkitRTCSessionDescription;
-var RTCIceCandidate = window.RTCIceCandidate || window.mozRTCIceCandidate || window.webkitRTCIceCandidate;
-
 var paccServices = angular.module('paccServices');
 
-paccServices.service('WebRTC', ['$rootScope', 'PAConnector',
-function($rootScope, PAConnector) {
-    // CONSTANTS
+/**
+ * Service that connects to the WebRTC session from the Chrome app.
+ */
+paccServices.service('WebRTC', function($rootScope, ChromeConnector) {
+    /// CONSTANTS
     var self = this;
     
-    var STUN_SERVER = 'stun:stun.l.google.com:19302';
 
-   
-    // Public API.
-    this.audio_url = null;
-    
-    
-    // Initialization.
-    
-    // Creates the PeerConnection.
-    var pcConfiguration = {
-        iceServers: [{url: STUN_SERVER}],
-    };
-    var pcOptions = {
-        optional: [{DtlsSrtpKeyAgreement: true}],
-    };
-    var pc = new RTCPeerConnection(pcConfiguration, pcOptions);
-
-    // Broadcasts the ice candidates once they pop up.
-    pc.onicecandidate = function(event) {
-        if (event.candidate) {
-            PAConnector.sendCCIceCandidate(event.candidate);
-        }
-    };
-    
-    // Once the audio stream is received from the WebRTC channel we trigger an
-    // angularjs update.
-    pc.onaddstream = function(event) {
-        $rootScope.$apply(function() {
-            self.audio_url = URL.createObjectURL(event.stream);
-        });
-    };
+    /// Public API.
 
     /**
-     * Generic error callback.
+     * The audio source of the WebRTC connection.
+     * @type {MediaStream}
      */
-    function onError(where, e) {
-        console.error('[' + where + ']: ' + e);
-    }
-
-
-    // Event listeners.
-    $rootScope.$on('PAConnector:onPASessionDescription', function(event, paSessionDescription) {
-        if (pc.remoteDescription && pc.remoteDescription.sdp) {
-            return;
-        }
-        
-        pc.setRemoteDescription(new RTCSessionDescription(paSessionDescription),
-            function() {
-                // We ask for the ICE candidates (they are delivered
-                // asynchronously).
-                PAConnector.getIceCandidates();
-                
-                // Creates the anser.
-                pc.createAnswer(function(ccSessionDescription) {
-                    pc.setLocalDescription(ccSessionDescription, function() {
-                        PAConnector.sendCCSessionDescription(ccSessionDescription);
-                    }, onError.bind(undefined, 'setLocalDescriptor'));
-                }, onError.bind(undefined, 'createAnswer'));
-            }, onError.bind(undefined, 'setRemoteDescritption'));
-    });
+    this.audioSource = null;
     
-    $rootScope.$on('PAConnector:onPAIceCandidate', function(event, paIceCandidate) {
-        pc.addIceCandidate(new RTCIceCandidate(paIceCandidate),
-                           function() {},
-                           onError.bind(undefined, 'addIceCandidate'));
-    });
-}]).run(function(WebRTC) {}); // Ensures that the service is loaded.
+    
+    /// Initialization.
+
+    /**
+     * Represents a WebRTC connection. Everytime a session description is
+     * received from the Chrome app a new instance of this class is created and
+     * the WebRTC connection on the old one is closed.
+     * @param {RTCSessionDescription} remoteSessionDescription
+     */
+    var WebRTCConnection = function(remoteSessionDescription) {
+        /// CONSTANTS
+        var configuration = {};
+
+
+        /// Public API.
+
+        /**
+         * Closes the WebRTC connection.
+         */
+        this.close = function() {
+            pc.close();
+        };
+
+
+        var pc = new RTCPeerConnection(configuration);
+
+        // Listens for local ICE candidates and forwards them to the Chrome app.
+        pc.onicecandidate = function(event) {
+            if (event.candidate) {
+                ChromeConnector.sendLocalIceCandidate(event.candidate);
+            }
+        };
+
+        // Once the audio stream is received from the WebRTC channel we trigger 
+        // an angularjs update.
+        pc.onaddstream = function(event) {
+            $rootScope.$apply(() => {
+                self.audioSource = event.stream;
+            });
+        };
+
+        // Listens for ICE candidates from the Chrome app.
+        ChromeConnector.onremoteicecandidate = function(candidate) {
+            pc.addIceCandidate(candidate)
+                .catch(e => console.error('addIceCandidate: ' +  e));
+        };
+
+        // Sets the session description of the Chrome app, creates an answer and
+        // sends it back to the Chrome app.
+        pc.setRemoteDescription(remoteSessionDescription)
+            .then(() => pc.createAnswer())
+            .then(ccSessionDescription => pc.setLocalDescription(ccSessionDescription))
+            .then(() => ChromeConnector.sendLocalSessionDescription(pc.localDescription))
+
+            .catch(e => console.error('setRemoteDescription: ' + e));
+    };
+
+    var webrtcConnection;
+
+    // Listens for session descriptions from the Chrome app and resets the
+    // webrtcConnection.
+    ChromeConnector.onremotesessiondescription = function(description) {
+        if (webrtcConnection) {
+            // Closes the WebRTC connection on the old handler.
+            webrtcConnection.close();
+        }
+
+        webrtcConnection = new WebRTCConnection(description);
+    };
+        
+}).run(function(WebRTC) {});
